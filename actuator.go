@@ -3,7 +3,7 @@ package actuator
 
 /*
 #cgo CFLAGS: -x objective-c
-#cgo LDFLAGS: -framework Foundation
+#cgo LDFLAGS: -framework Foundation -framework IOKit
 #import <HapticActuator.h>
 void actuateDown(int actuationId) {
 	[[HapticActuator sharedActuator] actuateTouchDownFeedback: actuationId];

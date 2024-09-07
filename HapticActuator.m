@@ -79,11 +79,6 @@
     return result;
 }
 
-static const UInt64 kKnownAppleMultitouchDeviceMultitouchIDs[] = {
-    0x200000001000000,
-    0x300000080500000
-};
-
 - (void)_htk_main_openActuator {
     if (_actuatorRef) {
         return;
@@ -96,16 +91,48 @@ static const UInt64 kKnownAppleMultitouchDeviceMultitouchIDs[] = {
         }
         _actuatorRef = actuatorRef;
     } else {
-        const size_t count = sizeof(kKnownAppleMultitouchDeviceMultitouchIDs) / sizeof(UInt64);
-        for (size_t index = 0; index < count; index++) {
-            const UInt64 multitouchDeviceMultitouchID = kKnownAppleMultitouchDeviceMultitouchIDs[index];
-            const CFTypeRef actuatorRef = _MTActuatorCreateFromDeviceID(multitouchDeviceMultitouchID);
-            if (actuatorRef) {
-                _actuatorRef = actuatorRef;
-                self.lastKnownMultitouchDeviceMultitouchID = multitouchDeviceMultitouchID;
-                break;
-            }
+        io_iterator_t itreator = IO_OBJECT_NULL;
+        // NOTE: `IOServiceGetMatchingServices` will take ownership of `matchingRef`. Do not release it.
+        const CFMutableDictionaryRef matchingRef = IOServiceMatching("AppleMultitouchDevice");
+        const kern_return_t result = IOServiceGetMatchingServices(kIOMasterPortDefault, matchingRef, &itreator);
+        if (result != KERN_SUCCESS) {
+            return;
         }
+
+        io_service_t service = IO_OBJECT_NULL;
+        while ((service = IOIteratorNext(itreator)) != IO_OBJECT_NULL) {
+            CFMutableDictionaryRef propertiesRef = NULL;
+            const kern_return_t result = IORegistryEntryCreateCFProperties(service, &propertiesRef, CFAllocatorGetDefault(), 0);
+            if (result != KERN_SUCCESS) {
+                IOObjectRetain(service);
+                continue;
+            }
+
+            NSMutableDictionary * const properties = (__bridge_transfer NSMutableDictionary *)propertiesRef;
+
+            // Use first actuation supported build-in, multitouch device, which should be a track pad.
+            NSString * const productProperty = (NSString *)properties[@"Product"];
+            NSNumber * const acutuationSupportedProperty = (NSNumber *)properties[@"ActuationSupported"];
+            NSNumber * const mtBuildInProperty = (NSNumber *)properties[@"MT Built-In"];
+            if (!(acutuationSupportedProperty.boolValue && mtBuildInProperty.boolValue)) {
+                IOObjectRetain(service);
+                continue;
+            }
+
+            NSNumber * const multitouchIDProperty = (NSNumber *)properties[@"Multitouch ID"];
+            const UInt64 multitouchDeviceMultitouchID = multitouchIDProperty.longLongValue;
+            const CFTypeRef actuatorRef = _MTActuatorCreateFromDeviceID(multitouchDeviceMultitouchID);
+            if (!actuatorRef) {
+                IOObjectRetain(service);
+                continue;
+            }
+            _actuatorRef = actuatorRef;
+            self.lastKnownMultitouchDeviceMultitouchID = multitouchDeviceMultitouchID;
+
+            IOObjectRelease(service);
+            break;
+        }
+        IOObjectRelease(itreator);
         if (!_actuatorRef) {
             return;
         }
